@@ -12,5 +12,5 @@ for in_f in files:
     for ext in exts:
         out_f = out_f.replace(ext[1:], '.mp4')
     print(f'{in_f} -> {out_f}')
-    subprocess.call(f'ffmpeg -i {in_f} -ac 1 -vsync vfr -vf mpdecimate,scale=iw/2:ih/2 {out_f}', shell=True)
+    subprocess.call(f'ffmpeg -n -i {in_f} -ac 1 -vsync vfr -vf mpdecimate,scale=iw/2:ih/2 {out_f}', shell=True)
 
