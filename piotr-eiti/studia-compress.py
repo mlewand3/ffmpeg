@@ -1,7 +1,3 @@
-# To call python/cmd/ps with NUC, please use:
-# pushd "\\172.16.0.110\AVICON wymiana\DLA PIOTRKA\Studia"
-# See more: https://superuser.com/questions/282963/browse-an-unc-path-using-windows-cmd-without-mapping-it-to-a-network-drive
-
 import os
 import glob
 import subprocess

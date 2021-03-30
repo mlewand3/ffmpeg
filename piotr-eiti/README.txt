@@ -25,5 +25,5 @@ ffmpeg.exe -i .\2021-02-25_15-00-56.mkv -ac 1 -vsync vfr -vf mpdecimate,scale=iw
 
 
 For all 36 files:
-12.0 GB -> 1.8 GB
+12.0 GB -> 2.5 GB
 
