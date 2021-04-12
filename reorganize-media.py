@@ -5,12 +5,12 @@ import typing
 import shutil
 import logging
 import datetime as dt
+from dateutil.parser import parse
 import subprocess
 from logging.config import dictConfig
 from PIL import Image
 from PIL.ExifTags import TAGS
 from videoprops import get_video_properties, get_audio_properties
-
 
 """See more: https://docs.python-guide.org/writing/logging/"""
 logging_config = dict(
@@ -33,7 +33,7 @@ logging_config = dict(
     },
     root={
         'handlers': ['sh', 'fh'],
-        'level': logging.DEBUG,
+        'level': logging.INFO,
     },
 )
 
@@ -228,7 +228,10 @@ def get_ntime(filepath: str) -> typing.Union[None, float]:
         filename_date_obj = dt.datetime.strptime(filename_date[:15], '%Y%m%d_%H%M%S')
     except ValueError as er:
         log.warning(f'Cannot parse {filename_date} to datetime')
-        return None
+        log.warning(f'Trying fuzzy')
+        filename_date_obj = parse(filename_date, fuzzy=True)
+        if not filename_date_obj:
+            return None
     return filename_date_obj.timestamp()
 
 
