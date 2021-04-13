@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import time
 import typing
 import shutil
@@ -33,29 +34,32 @@ logging_config = dict(
     },
     root={
         'handlers': ['sh', 'fh'],
-        'level': logging.INFO,
+        'level': logging.DEBUG,
     },
 )
 
 dictConfig(logging_config)
 log = logging.getLogger(__name__)
 
-override = False
+override = None  # '20180630'
+
 
 def print_msg(msg: str, explanation: str = '') -> None:
-    log.info(f'{" "*len("[  4d/  4d]")} {msg:25s} [ {explanation} ]')
+    """Helper function to log information"""
+    additional = f' [{explanation}]' if explanation else ''
+    log.info(f'{" "*len("[  4d/  4d]")} {msg:25s}{additional}')
 
 
-def optimize_jpg(filepath: str) -> None:
-    (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
-    img = Image.open(filepath)
+def optimize_jpg(file_path: str) -> None:
+    (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(file_path)
+    img = Image.open(file_path)
     exif = img.info['exif']
     high_quality = 1
     if img.size[0] * img.size[1] > 2 * 1024 * 1024 * high_quality or size > 1000 * 1500 * high_quality:
         new_img_size = (img.size[0]//2, img.size[1]//2)
         new_img = img.resize(new_img_size, resample=Image.LANCZOS)
         new_img.save(filepath, exif=exif)
-        (mode, ino, dev, nlink, uid, gid, new_size, atime, mtime, ctime) = os.stat(filepath)
+        #(mode, ino, dev, nlink, uid, gid, new_size, atime, mtime, ctime) = os.stat(file_path)
         log.info(f'             Resize [{img.size}] {size/1024:.1f}KB -> [{new_img.size}] {new_size/1024:.1f}KB')
     else:
         print_msg('Size OK', f'[{img.size}] {size/1024:.1f}KB')
@@ -81,7 +85,7 @@ def rename_jpg(filepath: str) -> str:
     else:
         directory = os.path.dirname(filepath)
         filename = os.path.basename(filepath)
-        additional = ''  # extract_additional(filename)  # oonlytest
+        additional = ''  # extract_additional(filename)  # onlytest
         filetime = datetaken.replace(':', '').replace(' ', '_')
         new_filepath = os.path.join(directory, filetime + additional + '.jpg')
         if filepath != new_filepath:
@@ -89,6 +93,7 @@ def rename_jpg(filepath: str) -> str:
             try:
                 os.rename(filepath, new_filepath)
             except Exception as ex:
+                log.error('Cannot rename file. Probably duplicated datetime (including seconds)')
                 os.rename(filepath, new_filepath.replace('.jpg', ' _1.jpg'))  # TODO: increase seconds number?
             return new_filepath
         else:
@@ -97,32 +102,42 @@ def rename_jpg(filepath: str) -> str:
 
 
 def process_jpg_impl(filepath: str) -> None:
-    # (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
     new_filepath = rename_jpg(filepath)
     optimize_jpg(new_filepath)
 
-def rename_mp4(filepath: str) -> str:
-    (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
-    filename = os.path.basename(filepath)
-    if filename.startswith('VID_') or filename.startswith('PXL_'):
-        directory = os.path.dirname(filepath)
-        new_filename = filename[4:]
-        if override:
-            new_filename = '20180630' + new_filename[8:]
-        new_filepath = os.path.join(directory, new_filename)
-        log.info(f'Rename {filename} -> {new_filename}')
-        os.rename(filepath, new_filepath)
-    else:
-        new_filename = filename[:15]
-        new_filepath = os.path.join(directory, new_filename + '_crf25.mp4')
-        os.rename(filepath, new_filepath)
 
+def perform_renaming(old_file_name: str, new_file_name: str, current_directory: str) -> None:
+    old_file_path = os.path.join(current_directory, old_file_name)
+    new_file_path = os.path.join(current_directory, new_file_name)
+    log.info(f'Rename {old_file_name} -> {new_file_name}')
+    try:
+        os.rename(old_file_path, new_file_path)
+    except Exception as ex:
+        log.error(f'Cannot rename: {ex}')
+
+
+def rename_mp4(file_path: str) -> str:
+    #(mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
+    base_name = os.path.basename(file_path)
+    old_file_name, extension = os.path.splitext(base_name)
+    current_directory = os.path.dirname(file_path)
+    if old_file_name.startswith('VID_') or old_file_name.startswith('PXL_'):
+        new_file_name = old_file_name[4:]
+    else:
+        new_file_name = old_file_name
+
+    if re.match('[0-9]{8}_[0-9]{9}', new_file_name):
+        new_file_name = new_file_name[:15]
+
+    perform_renaming(old_file_name + extension, new_file_name + extension, current_directory)
+
+    return os.path.join(current_directory, new_file_name + extension)
 
 
 def set_meta_mp4(filepath: str) -> None:
     stinfo = os.stat(filepath)
-    filename = os.path.basename(filepath)
-    actual_time = get_ntime(filename)
+    file_name = os.path.basename(filepath)
+    actual_time = get_ntime(file_name)
     base_time = ''
     if not actual_time:
         actual_time = get_mtime(filepath)
@@ -154,8 +169,8 @@ def set_meta_mp4(filepath: str) -> None:
         else:
             raise RuntimeError(f'Strange channels count: {channels}')
     ctime = dt.datetime.fromtimestamp(actual_time)
-    if override:
-        ctime.replace(year=2018, month=6, day=30)
+    #if override:
+    #    ctime.replace(year=2018, month=6, day=30)
     cmd = f'ffmpeg -i "{filepath}" -metadata creation_time="{ctime}" {flags} -y tmp.mp4'
     log.debug(' '*12 + f'Call: {cmd}')
     completed = subprocess.run(cmd, capture_output=True)
@@ -168,12 +183,16 @@ def set_meta_mp4(filepath: str) -> None:
             log.debug(' '*12 + 'stdout>' + line)
     if base_time:
         directory = os.path.dirname(filepath)
-        filename = base_time + " " + filename
-        new_filepath = os.path.join(directory, filename)
+        file_name = base_time + " " + file_name
+        new_filepath = os.path.join(directory, file_name)
     else:
         new_filepath = filepath
 
     new_filepath = new_filepath.replace('.avi', '.mp4')
+    # TODO: Add _crf25
+    if not '_crf25' in new_filepath:
+        new_filepath = new_filepath.replace('.mp4', '_crf25.mp4')
+    
     #if override:
     #    new_filepath = override_filepath(new_filepath)
     shutil.move('tmp.mp4', new_filepath)
@@ -184,12 +203,11 @@ def set_meta_mp4(filepath: str) -> None:
 def process_mp4_impl(filepath: str) -> None:
     if '_crf25' in filepath:
         print_msg('file OK', 'already converted')
-        set_meta_mp4(filepath)
         return
     else:
         print_msg('Will convert')
+        new_filepath = rename_mp4(filepath)
         set_meta_mp4(filepath)
-    new_filepath = rename_mp4(filepath)
 
 
 def process_jpg(filepath: str) -> None:
@@ -211,6 +229,7 @@ def get_ctime(filepath: str) -> int:
     (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
     return ctime
 
+
 def get_mtime(filepath: str) -> int:
     """Get modification time of the file"""
     (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(filepath)
@@ -220,7 +239,7 @@ def get_mtime(filepath: str) -> int:
 def get_ntime(filepath: str) -> typing.Union[None, float]:
     """Get (file)name time of the file
 
-    20201012_120030 ->
+    20201012_120030 -> float
     """
     filename = os.path.basename(filepath)
     filename_date = os.path.splitext(filename)[0]
@@ -229,8 +248,10 @@ def get_ntime(filepath: str) -> typing.Union[None, float]:
     except ValueError as er:
         log.warning(f'Cannot parse {filename_date} to datetime')
         log.warning(f'Trying fuzzy')
-        filename_date_obj = parse(filename_date, fuzzy=True)
-        if not filename_date_obj:
+        try:
+            filename_date_obj = parse(filename_date, fuzzy=True)
+        except ValueError as er:
+            log.warning(f'Even fuzzy matching does not work')
             return None
     return filename_date_obj.timestamp()
 
@@ -302,17 +323,14 @@ else:
 # TODO: Implement arbitrary directory
 directory_to_process = '.'
 
-total = 0
-for root, dirs, files in os.walk(directory_to_process):
-    total += len(files)
-
+total = sum([len(files) for root, dirs, files in os.walk(directory_to_process)])
 log.debug(f'Total files count: {total}')
 
 idx = 0
 for root, dirs, files in os.walk(directory_to_process, topdown=True):
     for filename in files:
-        filepath = os.path.join(pwd, root, filename)
+        input_filepath = os.path.join(pwd, root, filename)
         idx += 1
-        log.info(f'[{idx:4d}/{total:4d}] {filename:25s} ( {filepath} )')
+        log.info(f'[{idx:4d}/{total:4d}] {filename:25s} ( {input_filepath} )')
         process_function = choose_process_function(filename)
-        process_function(filepath)
+        process_function(input_filepath)
