@@ -58,8 +58,8 @@ def optimize_jpg(file_path: str) -> None:
     if img.size[0] * img.size[1] > 2 * 1024 * 1024 * high_quality or size > 1000 * 1500 * high_quality:
         new_img_size = (img.size[0]//2, img.size[1]//2)
         new_img = img.resize(new_img_size, resample=Image.LANCZOS)
-        new_img.save(filepath, exif=exif)
-        #(mode, ino, dev, nlink, uid, gid, new_size, atime, mtime, ctime) = os.stat(file_path)
+        new_img.save(file_path, exif=exif)
+        (mode, ino, dev, nlink, uid, gid, new_size, atime, mtime, ctime) = os.stat(file_path)
         log.info(f'             Resize [{img.size}] {size/1024:.1f}KB -> [{new_img.size}] {new_size/1024:.1f}KB')
     else:
         print_msg('Size OK', f'[{img.size}] {size/1024:.1f}KB')
