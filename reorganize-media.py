@@ -207,7 +207,7 @@ def process_mp4_impl(filepath: str) -> None:
     else:
         print_msg('Will convert')
         new_filepath = rename_mp4(filepath)
-        set_meta_mp4(filepath)
+        set_meta_mp4(new_filepath)
 
 
 def process_jpg(filepath: str) -> None:
