@@ -93,7 +93,7 @@ def rename_jpg(filepath: str) -> str:
     img.close()
 
     if datetaken is None:
-        log.warning(f'No DataTime EXIF Token in:{filepath}')
+        log.warning(f'No DataTime EXIF Token in: {filepath}')
     else:
         directory = os.path.dirname(filepath)
         filename = os.path.basename(filepath)
@@ -146,6 +146,18 @@ def rename_mp4(file_path: str) -> str:
 
     return os.path.join(current_directory, new_file_name + extension)
 
+# https://stackoverflow.com/a/4563642
+def utc_to_local_datetime( utc_datetime_str ):
+    from datetime import datetime
+    import time
+    EPOCH_DATETIME = datetime(1970, 1, 1)
+    SECONDS_PER_DAY = 24*60*60
+    utc_datetime = datetime.strptime(utc_datetime_str, "%Y:%m:%d %H:%M:%S")
+    delta = utc_datetime - EPOCH_DATETIME
+    utc_epoch = SECONDS_PER_DAY * delta.days + delta.seconds
+    time_struct = time.localtime( utc_epoch )
+    dt_args = time_struct[:6] + (delta.microseconds, )
+    return str(datetime( *dt_args ))
 
 def set_meta_mp4(filepath: str) -> None:
     stinfo = os.stat(filepath)
@@ -184,7 +196,13 @@ def set_meta_mp4(filepath: str) -> None:
     ctime = dt.datetime.fromtimestamp(actual_time)
     if override:
         ctime.replace(year=2018, month=6, day=30)  # FIXME: parse date from override to args
-    cmd = f'ffmpeg -i "{filepath}" -metadata creation_time="{ctime}" {flags} -y tmp.mp4'
+    # We add "Z" for creation time because: https://video.stackexchange.com/a/26330 
+    
+    # Current script properly changes names of JPG, but wrong on MP4 (UTF vs Local)
+    # Next step: run for all MP4 and:
+    # - copy File:Date created/File:Date modified to Origin:Media created for MP4 with "Z", in the past it was without Z (not sure if it will work on Summer time during whole year)
+    # - rename raw filename to match local time
+    cmd = f'ffmpeg -i "{filepath}" -metadata creation_time="{ctime}Z" {flags} -y tmp.mp4'
     log.debug(' '*12 + f'Call: {cmd}')
     completed = subprocess.run(cmd, capture_output=True)
     if completed.returncode != 0:
@@ -335,10 +353,10 @@ def main():
             
             input_filepath = os.path.join(pwd, root, filename)
             process_function = choose_process_function(filename)
-            try:
-                process_function(input_filepath)
-            except Exception as ex: # TODO: not pure Exception
-                log.error(f'Exception during {input_filepath} : {ex} {type(ex)}')
+            #try:
+            process_function(input_filepath)
+            #except Exception as ex: # TODO: not pure Exception
+            #    log.error(f'Exception during {input_filepath} : {ex} {type(ex)}')
 
 if __name__ == '__main__':
     main()
