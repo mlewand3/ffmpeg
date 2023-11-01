@@ -4,14 +4,24 @@ import re
 import time
 import typing
 import shutil
+
+try:
+    import coloredlogs
+    coloredlogs.install()
+except ModuleNotFoundError as er:
+    print(er)
+    pass
+
 import logging
 import datetime as dt
 from dateutil.parser import parse
+from tqdm import tqdm
 import subprocess
 from logging.config import dictConfig
 from PIL import Image
 from PIL.ExifTags import TAGS
 from videoprops import get_video_properties, get_audio_properties
+
 
 """See more: https://docs.python-guide.org/writing/logging/"""
 logging_config = dict(
@@ -23,11 +33,11 @@ logging_config = dict(
     handlers={
         'sh': {'class': 'logging.StreamHandler',
                'formatter': 'sf',
-               'level': logging.DEBUG},
+               'level': logging.WARNING},
         'fh': {'class': 'logging.handlers.RotatingFileHandler',
                'encoding': 'utf-8',
                'filename': 'reorganize-media.log',
-               'maxBytes': 5 * 1024 * 1024,
+               'maxBytes': 25_000_000,
                'backupCount': 10,
                'formatter': 'ff',
                'level': logging.DEBUG}
@@ -41,7 +51,7 @@ logging_config = dict(
 dictConfig(logging_config)
 log = logging.getLogger(__name__)
 
-override = None  # '20180630'
+override = None  # '20180630' TODO: descirbe what it does
 
 
 def print_msg(msg: str, explanation: str = '') -> None:
@@ -54,13 +64,15 @@ def optimize_jpg(file_path: str) -> None:
     (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime) = os.stat(file_path)
     img = Image.open(file_path)
     exif = img.info['exif']
-    high_quality = 1
-    if img.size[0] * img.size[1] > 2 * 1024 * 1024 * high_quality or size > 1000 * 1500 * high_quality:
-        new_img_size = (img.size[0]//2, img.size[1]//2)
+    # Pixel5 Full: 3024*4032 (12.2 MP ~3-5MB)
+    # Pixel5 Half: 1944*2592 (5.0 MP ~1-2MB)
+    # Threshold: (3.0MP or 1.5MB)
+    if img.size[0] * img.size[1] > 3 * 1024 * 1024 or size > 1024 * 1500:
+        new_img_size = (img.size[0] // 2, img.size[1] // 2)
         new_img = img.resize(new_img_size, resample=Image.LANCZOS)
         new_img.save(file_path, exif=exif)
         (mode, ino, dev, nlink, uid, gid, new_size, atime, mtime, ctime) = os.stat(file_path)
-        log.info(f'             Resize [{img.size}] {size/1024:.1f}KB -> [{new_img.size}] {new_size/1024:.1f}KB')
+        print_msg('Resized', f'[{img.size}] {size/1024:.1f}KB -> [{new_img.size}] {new_size/1024:.1f}KB')
     else:
         print_msg('Size OK', f'[{img.size}] {size/1024:.1f}KB')
     img.close()
@@ -92,16 +104,17 @@ def rename_jpg(filepath: str) -> str:
             log.info(f'Rename {filename} -> {new_filepath}')
             try:
                 os.rename(filepath, new_filepath)
-            except Exception as ex:
-                log.error('Cannot rename file. Probably duplicated datetime (including seconds)')
-                os.rename(filepath, new_filepath.replace('.jpg', ' _1.jpg'))  # TODO: increase seconds number?
+            except FileExistsError as ex:
+                duplicated_filepath = new_filepath.replace('.jpg', '_verify.jpg')
+                log.error(f'Cannot rename file. Probably duplicated datetime (seconds resolution) for: {duplicated_filepath}')
+                os.rename(filepath, duplicated_filepath)  # TODO: increase seconds number?
             return new_filepath
         else:
             print_msg('name OK')
     return filepath
 
 
-def process_jpg_impl(filepath: str) -> None:
+def process_jpg(filepath: str) -> None:
     new_filepath = rename_jpg(filepath)
     optimize_jpg(new_filepath)
 
@@ -150,7 +163,7 @@ def set_meta_mp4(filepath: str) -> None:
     except RuntimeError as ex:
         log.warning(ex)
         channels = 0
-    #print(vid_props['tags']['creation_time'])
+    log.debug(f"{vid_props['tags']['creation_time']}")
     bitrate = int(vid_props["bit_rate"]) // 1024
     log.debug(f'{bitrate=}kBs {channels=}')
     if bitrate > 400:
@@ -169,8 +182,8 @@ def set_meta_mp4(filepath: str) -> None:
         else:
             raise RuntimeError(f'Strange channels count: {channels}')
     ctime = dt.datetime.fromtimestamp(actual_time)
-    #if override:
-    #    ctime.replace(year=2018, month=6, day=30)
+    if override:
+        ctime.replace(year=2018, month=6, day=30)  # FIXME: parse date from override to args
     cmd = f'ffmpeg -i "{filepath}" -metadata creation_time="{ctime}" {flags} -y tmp.mp4'
     log.debug(' '*12 + f'Call: {cmd}')
     completed = subprocess.run(cmd, capture_output=True)
@@ -193,14 +206,16 @@ def set_meta_mp4(filepath: str) -> None:
     if not '_crf25' in new_filepath:
         new_filepath = new_filepath.replace('.mp4', '_crf25.mp4')
     
-    #if override:
-    #    new_filepath = override_filepath(new_filepath)
+    if override:
+        new_filepath = override_filepath(new_filepath)
+
     shutil.move('tmp.mp4', new_filepath)
     # Keep accesstime, change modifiedtime
     os.utime(filepath, (stinfo.st_atime, actual_time))
+    os.remove(filepath)
 
 
-def process_mp4_impl(filepath: str) -> None:
+def process_mp4(filepath: str) -> None:
     if '_crf25' in filepath:
         print_msg('file OK', 'already converted')
         return
@@ -208,20 +223,6 @@ def process_mp4_impl(filepath: str) -> None:
         print_msg('Will convert')
         new_filepath = rename_mp4(filepath)
         set_meta_mp4(new_filepath)
-
-
-def process_jpg(filepath: str) -> None:
-    try:
-        process_jpg_impl(filepath)
-    except Exception as ex:
-        log.error(f'Exception during {filepath} : {ex}')
-
-
-def process_mp4(filepath: str) -> None:
-    try:
-        process_mp4_impl(filepath)
-    except Exception as ex:
-        log.error(f'Exception during {filepath} : {ex}')
 
 
 def get_ctime(filepath: str) -> int:
@@ -268,9 +269,10 @@ def extract_additional(filename: str) -> str:
 
 def rename_basing_on_time(filepath: str, new_time) -> None:
     filename = os.path.basename(filepath)
-    additional = '' #extract_additional(filename)
+    additional = '' #TODO extract_additional(filename)
     ntime = get_ntime(filepath)
-    if not ntime:        ntime = sys.maxsize
+    if not ntime:
+        ntime = sys.maxsize
     if new_time < ntime:
         directory = os.path.dirname(filepath)
         extension = os.path.splitext(filename)[-1]
@@ -280,21 +282,19 @@ def rename_basing_on_time(filepath: str, new_time) -> None:
         os.rename(filepath, new_filepath)
 
 
-def process_generic_impl(filepath: str) -> None:
+def process_generic(filepath: str) -> None:
     new_time = get_mtime(filepath)
     rename_basing_on_modification_time(filepath, new_time)
 
 
-def process_generic(filepath: str) -> None:
-    try:
-        process_generic_impl(filepath)
-    except Exception as ex:
-        log.error(f'Exception during {filepath} : {ex}')
+def process_delete(filepath: str) -> None:
+    log.info(f'Removing {filepath}')
+    os.remove(filepath)
 
 
 def process_none(filepath: str) -> None:
     filename = os.path.basename(filepath)
-    print_msg('file OK', 'not JPEG or MP4 file')
+    print_msg('file OK', 'not media (JPEG or MP4 or GIF) file')
 
 
 def choose_process_function(filename: str) -> typing.Callable:
@@ -305,32 +305,40 @@ def choose_process_function(filename: str) -> typing.Callable:
         return process_mp4
     elif name.endswith('.gif'):
         return process_generic
+    elif name.endswith('.mp'):
+        return process_delete
     else:
         return process_none
 
+def setup_environment() -> None:
+    if ffmpeg_exe := shutil.which('ffmpeg'):
+        # TODO: also *.avi, *.mkv
+        log.debug(f'ffmpeg executable found in: {ffmpeg_exe}')
+        ffmpeg_cmd = """$newvid = $oldvid.DirectoryName +'\' + $oldvid.BaseName + '_crf' + $crf + '.mp4'
+                        {ffmpeg_exe} -i $oldvid -ac 1 -vcodec libx264 -vf "scale=iw/2:ih/2" -crf 25 $newvid"""
+    else:
+        log.error('No ffmpeg executable found. Please visit: https://ffmpeg.org/download.html')
 
-pwd = os.getcwd()
-log.debug(f'pwd: {pwd}')
+def main():
+    pwd = os.getcwd()
+    log.debug(f'pwd: {pwd}')
+    
+    setup_environment()
 
-if ffmpeg_exe := shutil.which('ffmpeg'):
-    # TODO: also *.avi, *.mkv
-    log.debug(f'ffmpeg executable found in: {ffmpeg_exe}')
-    ffmpeg_cmd = """$newvid = $oldvid.DirectoryName +'\' + $oldvid.BaseName + '_crf' + $crf + '.mp4'
-                    {ffmpeg_exe} -i $oldvid -ac 1 -vcodec libx264 -vf "scale=iw/2:ih/2" -crf 25 $newvid"""
-else:
-    log.error('No ffmpeg executable found')
+    # TODO: Implement arbitrary directory
+    directory_to_process = '.'
 
-# TODO: Implement arbitrary directory
-directory_to_process = '.'
+    for root, dirs, files in os.walk(directory_to_process, topdown=True):
+        progression_bar = tqdm(files, desc=dirs)
+        for filename in progression_bar:
+            progression_bar.set_description(filename)
+            
+            input_filepath = os.path.join(pwd, root, filename)
+            process_function = choose_process_function(filename)
+            try:
+                process_function(input_filepath)
+            except Exception as ex: # TODO: not pure Exception
+                log.error(f'Exception during {input_filepath} : {ex} {type(ex)}')
 
-total = sum([len(files) for root, dirs, files in os.walk(directory_to_process)])
-log.debug(f'Total files count: {total}')
-
-idx = 0
-for root, dirs, files in os.walk(directory_to_process, topdown=True):
-    for filename in files:
-        input_filepath = os.path.join(pwd, root, filename)
-        idx += 1
-        log.info(f'[{idx:4d}/{total:4d}] {filename:25s} ( {input_filepath} )')
-        process_function = choose_process_function(filename)
-        process_function(input_filepath)
+if __name__ == '__main__':
+    main()

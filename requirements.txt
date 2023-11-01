@@ -1,2 +1,5 @@
 Pillow
 get-video-properties
+python-dateutil
+tqdm
+coloredlogs
